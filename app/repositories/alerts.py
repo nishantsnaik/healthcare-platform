@@ -1,16 +1,17 @@
-from app.models.alert import Alert
+from sqlalchemy.ext.asyncio import AsyncSession
 
-alerts_db: dict[int, Alert] = {}
-alert_counter: int = 0
+from app.models.alert_db import AlertDB
+from datetime import datetime
 
-def fetch_alert(alert_id: int) -> Alert|None:
-    return alerts_db.get(alert_id)
+async def fetch_alert(db: AsyncSession, alert_id: int) -> AlertDB | None:
+    return await db.get(AlertDB, alert_id) # ← async, returns actual alert
 
-def save_alert(alert: Alert) -> Alert:
-    alerts_db[alert.id] = alert
+async def save_alert(db: AsyncSession, alert_data: dict) -> AlertDB:
+    alert = AlertDB(
+        **alert_data,
+        created_at=datetime.now()
+    )
+    db.add(alert)
+    await db.commit()
+    await db.refresh(alert)   # ← gets the auto-generated id back
     return alert
-
-def get_next_int() -> int:
-    global alert_counter
-    alert_counter += 1
-    return alert_counter

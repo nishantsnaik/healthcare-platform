@@ -1,13 +1,17 @@
-from app.models.alert import Alert, AlertPriority
-from app.repositories.alerts import alerts_db
+from app.models.alert import AlertPriority
+
 from app.repositories.assignment import get_active_assignment  # you'll stub this
+from app.repositories.alerts import fetch_alert
 from app.core.websocket_manager import manager
+from sqlalchemy.ext.asyncio import AsyncSession
 
 import json
 import re
 
 import os
 from openai import AsyncOpenAI
+from app.core.database import AsyncSessionLocal
+
 
 async def generate_llm_summary(alert_id: int):
     prompt = """
@@ -83,11 +87,13 @@ async def generate_llm_summary(alert_id: int):
 
                 """
 
-    try:
-            alert = alerts_db.get(alert_id)
+    async with AsyncSessionLocal() as db:
+        try:
+
+            alert = await fetch_alert(db, alert_id)
             alert_input = {
 
-                "patient_id" : alert.patient_id,
+                "patient_id": alert.patient_id,
                 "alert_type": alert.alert_type,
                 "priority": alert.priority,
                 "status": alert.status,
@@ -110,6 +116,7 @@ async def generate_llm_summary(alert_id: int):
 
             alert.llm_summary = parsed["summary"]
             alert.llm_priority_suggestion = AlertPriority[parsed["recommended_priority"].upper()]
+            await db.commit()
 
             assignment = get_active_assignment(alert.patient_id)
             if assignment:
@@ -121,12 +128,8 @@ async def generate_llm_summary(alert_id: int):
 
 
 
-    except Exception as e:
-         print(f"LLM generation failed for alert {alert_id}: {e}")
-
-
-
-
+        except Exception as e:
+            print(f"LLM generation failed for alert {alert_id}: {e}")
 
 # 1. fetch alert from alerts_db
 
