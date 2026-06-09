@@ -1,12 +1,13 @@
 from aiokafka import AIOKafkaProducer
 import json
+from app.core.config import settings
 
 producer: AIOKafkaProducer | None = None
 
 async def start_producer():
     global producer
     producer = AIOKafkaProducer(
-        bootstrap_servers="localhost:9092",
+        bootstrap_servers=settings.kafka_bootstrap_servers,
         value_serializer=lambda v: json.dumps(v).encode("utf-8")
     )
     await producer.start()

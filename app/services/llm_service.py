@@ -3,7 +3,7 @@ from app.models.alert import AlertPriority
 from app.repositories.assignment import get_active_assignment  # you'll stub this
 from app.repositories.alerts import fetch_alert
 from app.core.websocket_manager import manager
-from sqlalchemy.ext.asyncio import AsyncSession
+from app.core.config import settings
 
 import json
 import re
@@ -101,7 +101,7 @@ async def generate_llm_summary(alert_id: int):
                 "unit": alert.unit
             }
 
-            client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+            client = AsyncOpenAI(api_key=settings.openai_api_key)
             response = await client.chat.completions.create(
                 model="gpt-4o",
                 max_tokens=1024,
@@ -115,7 +115,7 @@ async def generate_llm_summary(alert_id: int):
             parsed = json.loads(result)
 
             alert.llm_summary = parsed["summary"]
-            alert.llm_priority_suggestion = AlertPriority[parsed["recommended_priority"].upper()]
+            alert.llm_priority_suggestion = AlertPriority[parsed["recommended_priority"].upper()].value  # ← add .value
             await db.commit()
 
             assignment = get_active_assignment(alert.patient_id)

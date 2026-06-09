@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+openai
+aiokafka
+redis
+celery
+sqlalchemy
+aiosqlite
+pydantic
+pydantic-settings
+python-dotenv
+asyncpg
+psycopg2-binary

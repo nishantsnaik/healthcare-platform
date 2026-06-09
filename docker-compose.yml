@@ -1,11 +1,28 @@
-version: '3.8'
-
 services:
+  celery_worker:
+    build: .
+    command: celery -A app.core.celery_app worker --loglevel=info
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      DATABASE_URL: postgresql+asyncpg://healthcare:healthcare@postgres:5432/healthcare
+      ESCALATION_NURSE_DELAY: 30
+      ESCALATION_CHARGE_NURSE_DELAY: 60
+      ESCALATION_PHYSICIAN_DELAY: 90
+    depends_on:
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+
   kafka:
     image: confluentinc/cp-kafka:7.6.0
     container_name: kafka
     ports:
-      - "9092:9092"    # host:container
+      - "9092:9092"
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
@@ -14,9 +31,33 @@ services:
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      CLUSTER_ID: 3EnEkRKhQSepKTWpEpEg41   # random unique string
+      CLUSTER_ID: 3EnEkRKhQSepKTWpEpEg41
 
   redis:
     image: redis:7-alpine
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: healthcare
+      POSTGRES_PASSWORD: healthcare
+      POSTGRES_DB: healthcare
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U healthcare"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  postgres_data:

@@ -9,7 +9,8 @@ A production-style FastAPI application simulating clinical alert workflows used 
 ```
 healthcare-platform/
 ├── main.py                          # App entry point, lifespan, router registration
-├── docker-compose.yml               # Kafka (KRaft) + Redis
+├── docker-compose.yml               # Kafka, Redis, PostgreSQL, Celery worker
+├── Dockerfile                       # Celery worker container
 ├── requirements.txt
 ├── .env                             # API keys — never commit
 ├── .gitignore
@@ -18,15 +19,22 @@ healthcare-platform/
     │   └── alerts.py                # POST, GET, PATCH /alerts
     ├── services/
     │   └── llm_service.py           # OpenAI GPT-4o summarization
+    ├── tasks/
+    │   └── escalation.py            # Celery task for alert escalation
     ├── models/
     │   ├── alert.py                 # Alert, AlertCreate, AlertUpdate + enums
+    │   ├── alert_db.py              # SQLAlchemy database model
     │   ├── patient.py               # Patient, PatientCreate + enums
     │   ├── caregiver.py             # Caregiver, CaregiverCreate + enums
     │   ├── assignment.py            # Assignment, AssignmentCreate
     │   └── message.py              # Message, MessageCreate + enums
     ├── repositories/
-    │   └── alert_repository.py      # In-memory alerts_db, get/save functions
+    │   ├── alerts.py                # Alert repository with database operations
+    │   └── assignment.py            # Assignment repository
     └── core/
+        ├── celery_app.py            # Celery app configuration
+        ├── config.py                # Centralized settings with pydantic-settings
+        ├── database.py              # Async (FastAPI) and sync (Celery) database sessions
         ├── kafka_producer.py        # aiokafka async producer
         └── websocket_manager.py     # ConnectionManager for real-time push
 ```
@@ -45,7 +53,7 @@ source .venv/bin/activate
 ### 2. Install dependencies
 
 ```bash
-.venv/bin/pip install fastapi uvicorn openai aiokafka redis celery pydantic python-dotenv
+.venv/bin/pip install -r requirements.txt
 ```
 
 ### 3. Set up environment variables
@@ -53,6 +61,10 @@ source .venv/bin/activate
 ```bash
 # .env
 OPENAI_API_KEY=your_openai_key_here
+ESCALATION_NURSE_DELAY=30
+ESCALATION_CHARGE_NURSE_DELAY=60
+ESCALATION_PHYSICIAN_DELAY=90
+DATABASE_URL=postgresql+asyncpg://healthcare:healthcare@localhost:5432/healthcare
 ```
 
 ### 4. Start infrastructure
@@ -78,7 +90,13 @@ docker exec kafka kafka-topics \
 .venv/bin/uvicorn main:app --reload
 ```
 
-### 7. Open Swagger UI
+### 7. Start Celery worker (in separate terminal)
+
+```bash
+.venv/bin/celery -A app.core.celery_app worker --loglevel=info
+```
+
+### 8. Open Swagger UI
 
 ```
 http://localhost:8000/docs
@@ -165,6 +183,24 @@ docker exec -it healthcare-platform-redis-1 redis-cli
 
 ```bash
 docker exec healthcare-platform-redis-1 redis-cli keys "*"
+```
+
+### PostgreSQL — connect CLI
+
+```bash
+docker exec -it healthcare-platform-postgres-1 psql -U healthcare -d healthcare
+```
+
+### PostgreSQL — view tables
+
+```bash
+docker exec healthcare-platform-postgres-1 psql -U healthcare -d healthcare -c "\dt"
+```
+
+### Celery worker — view logs
+
+```bash
+docker logs healthcare-platform-celery_worker-1
 ```
 
 ---
@@ -314,7 +350,7 @@ Response:
 
 ```
 new → acknowledged → (resolved via PATCH)
-new → escalated    → (auto-escalated after 5/10/15 min)
+new → charge_nurse → physician → failsafe (auto-escalated after configurable delays)
 ```
 
 ---
@@ -357,11 +393,14 @@ MessageType: secure message, broadcast, team notification
 | Alert routing | By bed/unit, not caregiver name | Caregiver-independent — survives shift changes |
 | MRN format | Facility-prefixed (`MGH-100123`) | Prevents ID collision across hospitals |
 | LLM call | Background task, not blocking | POST returns in <100ms, LLM runs async |
+| Escalation engine | Celery with Redis | Reliable task queue with retry and scheduling |
+| Database sessions | Async (FastAPI) + Sync (Celery) | FastAPI requires async, Celery requires sync |
 | `end_datetime` on assignment | Required at creation | Enforces timebound, shift-based assignments |
 | `is_active` on assignment | Not stored — computed | Single source of truth from start/end datetime |
 | Alert storage | Repository pattern | Decouples router from data layer |
 | WebSocket key | `caregiver_id:device_id` | Supports multi-device per caregiver |
 | Kafka vs polling | Kafka (KRaft) | Event-driven, survives server restarts |
+| Configuration | pydantic-settings | Type-safe, environment-based configuration |
 
 ---
 
@@ -382,6 +421,12 @@ MessageType: secure message, broadcast, team notification
 | Variable | Description |
 |---|---|
 | `OPENAI_API_KEY` | OpenAI API key for GPT-4o summarization |
+| `ESCALATION_NURSE_DELAY` | Delay in seconds before escalating to nurse (default: 30) |
+| `ESCALATION_CHARGE_NURSE_DELAY` | Delay in seconds before escalating to charge nurse (default: 60) |
+| `ESCALATION_PHYSICIAN_DELAY` | Delay in seconds before escalating to physician (default: 90) |
+| `DATABASE_URL` | PostgreSQL connection URL |
+| `KAFKA_BOOTSTRAP_SERVERS` | Kafka bootstrap servers (default: localhost:9092) |
+| `REDIS_URL` | Redis connection URL (default: redis://localhost:6379/0) |
 
 ---
 
@@ -392,6 +437,7 @@ MessageType: secure message, broadcast, team notification
 | FastAPI | 8000 |
 | Kafka | 9092 |
 | Redis | 6379 |
+| PostgreSQL | 5432 |
 
 ---
 
@@ -404,10 +450,12 @@ MessageType: secure message, broadcast, team notification
 - Repository pattern — alert_repository.py
 - WebSocket manager — ConnectionManager
 - Kafka producer — aiokafka async
-- Docker infrastructure — Kafka KRaft + Redis
+- Docker infrastructure — Kafka KRaft + Redis + PostgreSQL
+- Celery escalation engine — auto-escalation through charge_nurse → physician → failsafe
+- Centralized configuration — pydantic-settings
+- Async and sync database sessions — FastAPI (async) and Celery (sync)
 
 ### Remaining
-- Escalation engine — 5/10/15 min Celery tasks
 - Care team directory endpoints
 - Patient assignment endpoints
 - Secure messaging endpoints
