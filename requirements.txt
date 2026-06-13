@@ -11,3 +11,8 @@ pydantic-settings
 python-dotenv
 asyncpg
 psycopg2-binary
+structlog
+pytest
+pytest-asyncio
+httpx
+pytest-mock
